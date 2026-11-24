@@ -1,3 +1,5 @@
-module github.com/YOUR_USERNAME/go-playground
+module github.com/rvsubbu/go-playground
 
 go 1.27
+
+require github.com/go-chi/chi/v5 v5.5.0
