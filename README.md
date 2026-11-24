@@ -1,8 +1,9 @@
 # Go HTTP Server Playground
 
-A small Go project for practicing HTTP server fundamentals and comparing
+A small Go project for illustrating HTTP server fundamentals and comparing
 `net/http`, Chi, and Gin. The `basic_server` app exposes the same API with each
-router; select the implementation in YAML configuration.
+router; select the implementation in YAML configuration; graceful exit handled;
+basic metrics for requests_total and latency added
 
 ## Requirements
 
