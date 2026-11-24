@@ -1,1 +1,1 @@
-Re-sharpen muscle memory for golang frameworks and concepts
+Sharpen muscle memory for golang frameworks and concepts
