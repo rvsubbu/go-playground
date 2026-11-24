@@ -1,0 +1,17 @@
+app:
+  name: "api_server"
+  env: "dev"
+
+logging:
+  level: debug
+  requests: true
+
+server:
+  addr: ":8080"
+  read_timeout: 1s
+  #web_server: "net/http" # Other values are "gin", "chi"
+  web_server: "gin" # Other values are "gin", "chi"
+
+# Future
+#client:
+  #timeout: 1s
