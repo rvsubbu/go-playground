@@ -11,13 +11,13 @@ import (
 // cmdline flag and env vars not needed for now
 
 type BasicAppConfig struct {
-	Name string `yaml: "name"`
-	Env  string `yaml: "env"`
+	Name string `yaml:"name"`
+	Env  string `yaml:"env"`
 }
 
 type BasicLogConfig struct {
-    Level    string `yaml:"level"`
-    Requests bool   `yaml:"requests"`
+	Level    string `yaml:"level"`
+	Requests bool   `yaml:"requests"`
 	// Future
 	//Db       bool `yaml: "db"`
 	//Tracing  bool `yaml: "tracing"`
@@ -31,17 +31,17 @@ type BasicServerConfig struct {
 }
 
 type BasicConfig struct {
-    App    BasicAppConfig `yaml:"app"`
-    Log    BasicLogConfig `yaml:"logging"`
-    Server BasicServerConfig `yaml:"server"`
+	App    BasicAppConfig    `yaml:"app"`
+	Log    BasicLogConfig    `yaml:"logging"`
+	Server BasicServerConfig `yaml:"server"`
 }
 
 var BasicConf *BasicConfig
 
 func defaultBasicConfig() {
-	BasicConf = &BasicConfig {
-		App: BasicAppConfig{Name: "unknown", Env: "dev"},
-		Log: BasicLogConfig{Level: "debug", Requests: true},
+	BasicConf = &BasicConfig{
+		App:    BasicAppConfig{Name: "unknown", Env: "dev"},
+		Log:    BasicLogConfig{Level: "debug", Requests: true},
 		Server: BasicServerConfig{Addr: ":8080", ReadTimeout: 1 * time.Second},
 	}
 }

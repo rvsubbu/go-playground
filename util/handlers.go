@@ -13,20 +13,17 @@ type BuildInfo struct {
 	Version   string `json:"version"`
 	GitSHA    string `json:"git_sha"`
 	BuildTime string `json:"build_time"`
-	Env       string `json:"env"`
-	LogLevel  string `json:"log_level"`
 }
 
-func VersionHandler(buildInfo BuildInfo) http.HandlerFunc {
+func VersionHandler(buildInfo *BuildInfo) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		WriteJSONResponse(w, http.StatusOK, buildInfo)
 	}
 }
 
-func ConfigHandler(buildInfo BuildInfo) http.HandlerFunc {
+func ConfigHandler(buildInfo *BuildInfo) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		config := map[string]string{"env": buildInfo.Env, "log_level": buildInfo.LogLevel}
-		WriteJSONResponse(w, http.StatusOK, config)
+		WriteJSONResponse(w, http.StatusOK, BasicConf)
 	}
 }
 
@@ -45,6 +42,19 @@ func MetricsHandler() http.HandlerFunc {
 				"http_requests_total %d\n",
 			HttpRequestsTotal.Load(),
 		)
+		fmt.Fprintln(w,
+			"# HELP http_request_duration_seconds HTTP request latency in seconds.\n"+
+				"# TYPE http_request_duration_seconds histogram",
+		)
+		for i, bucket := range requestDurationBuckets {
+			fmt.Fprintf(w, "http_request_duration_seconds_bucket{le=%q} %d\n",
+				bucket.label, requestDurationBucketCounts[i].Load())
+		}
+		count := requestDurationCount.Load()
+		fmt.Fprintf(w, "http_request_duration_seconds_bucket{le=\"+Inf\"} %d\n", count)
+		fmt.Fprintf(w, "http_request_duration_seconds_sum %.9f\n",
+			float64(requestDurationSumNanos.Load())/float64(1_000_000_000))
+		fmt.Fprintf(w, "http_request_duration_seconds_count %d\n", count)
 	}
 }
 
