@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"sort"
 	"strings"
 )
 
@@ -36,12 +37,35 @@ func HealthzHandler() http.HandlerFunc {
 func MetricsHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-		fmt.Fprintf(w,
+		fmt.Fprintln(w,
 			"# HELP http_requests_total Total HTTP requests served.\n"+
-				"# TYPE http_requests_total counter\n"+
-				"http_requests_total %d\n",
-			HttpRequestsTotal.Load(),
+				"# TYPE http_requests_total counter",
 		)
+		samples := requestCounterSnapshot()
+		sort.Slice(samples, func(i, j int) bool {
+			a, b := samples[i].labels, samples[j].labels
+			if a.appName != b.appName {
+				return a.appName < b.appName
+			}
+			if a.method != b.method {
+				return a.method < b.method
+			}
+			if a.status != b.status {
+				return a.status < b.status
+			}
+			return a.apiNickname < b.apiNickname
+		})
+		for _, sample := range samples {
+			labels := sample.labels
+			fmt.Fprintf(w,
+				"http_requests_total{app_name=%s,method=%s,status=%s,apiNickname=%s} %d\n",
+				escapePrometheusLabel(labels.appName),
+				escapePrometheusLabel(labels.method),
+				escapePrometheusLabel(formatStatus(labels.status)),
+				escapePrometheusLabel(labels.apiNickname),
+				sample.count,
+			)
+		}
 		fmt.Fprintln(w,
 			"# HELP http_request_duration_seconds HTTP request latency in seconds.\n"+
 				"# TYPE http_request_duration_seconds histogram",

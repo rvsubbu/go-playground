@@ -1,11 +1,18 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -40,6 +47,11 @@ func init() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	var logLevel slog.Level
+	if err := logLevel.UnmarshalText([]byte(strings.ToUpper(util.BasicConf.Log.Level))); err != nil {
+		log.Fatalf("invalid log level %q: %v", util.BasicConf.Log.Level, err)
+	}
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: logLevel})))
 	fmt.Printf("%+v\n", util.BasicConf)
 }
 
@@ -57,19 +69,58 @@ func main() {
 	}
 
 	if server == nil {
-		log.Fatal("server creation failure")
+		slog.Error("server creation failure")
+		os.Exit(1)
 	}
-	log.Printf("Basic API Server listening on port %s", server.Addr)
-	if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatal(err)
+	if err := runServer(server); err != nil {
+		slog.Error("server stopped with error", "error", err)
+		os.Exit(1)
 	}
+}
+
+func runServer(server *http.Server) error {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	serverErrors := make(chan error, 1)
+	go func() {
+		serverErrors <- server.ListenAndServe()
+	}()
+
+	slog.Info("Basic API Server listening", "addr", server.Addr)
+	select {
+	case err := <-serverErrors:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	case <-ctx.Done():
+		slog.Info("Shutdown signal received")
+	}
+
+	shutdownContext, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	shutdownErr := server.Shutdown(shutdownContext)
+	if shutdownErr != nil {
+		slog.Warn("Graceful shutdown timed out; closing active connections", "error", shutdownErr)
+		if err := server.Close(); err != nil {
+			return errors.Join(shutdownErr, fmt.Errorf("force close server: %w", err))
+		}
+	}
+
+	if err := <-serverErrors; err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return err
+	}
+	if shutdownErr != nil {
+		return fmt.Errorf("graceful shutdown: %w", shutdownErr)
+	}
+	return nil
 }
 
 func chiSetup() *http.Server {
 	r := chi.NewRouter()
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
-	r.Use(util.IncrRequests)
 
 	r.Get("/version", func(w http.ResponseWriter, r *http.Request) {
 		util.VersionHandler(buildInfo)(w, r)
@@ -86,7 +137,7 @@ func chiSetup() *http.Server {
 
 	return &http.Server{
 		Addr:              util.BasicConf.Server.Addr,
-		Handler:           r,
+		Handler:           util.InstrumentRequests(util.BasicConf.App.Name)(r),
 		ReadHeaderTimeout: util.BasicConf.Server.ReadTimeout,
 	}
 }
@@ -101,7 +152,7 @@ func ginSetup() *http.Server {
 
 	return &http.Server{
 		Addr:              util.BasicConf.Server.Addr,
-		Handler:           util.IncrRequests(router),
+		Handler:           util.InstrumentRequests(util.BasicConf.App.Name)(router),
 		ReadHeaderTimeout: util.BasicConf.Server.ReadTimeout,
 	}
 }
@@ -127,7 +178,7 @@ func netHttpSetup() *http.Server {
 
 	return &http.Server{
 		Addr:              util.BasicConf.Server.Addr,
-		Handler:           util.IncrRequests(mux),
+		Handler:           util.InstrumentRequests(util.BasicConf.App.Name)(mux),
 		ReadHeaderTimeout: util.BasicConf.Server.ReadTimeout,
 	}
 }

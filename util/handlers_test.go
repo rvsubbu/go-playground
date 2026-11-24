@@ -1,8 +1,10 @@
 package util
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -89,12 +91,6 @@ func TestHealthzHandler(t *testing.T) {
 
 func TestMetricsHandler(t *testing.T) {
 	response := httptest.NewRecorder()
-	wantRequestsTotal := fmt.Sprintf(
-		"# HELP http_requests_total Total HTTP requests served.\n"+
-			"# TYPE http_requests_total counter\n"+
-			"http_requests_total %d\n",
-		HttpRequestsTotal.Load(),
-	)
 
 	MetricsHandler().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/metrics", nil))
 
@@ -106,7 +102,8 @@ func TestMetricsHandler(t *testing.T) {
 	}
 	body := response.Body.String()
 	for _, want := range []string{
-		wantRequestsTotal,
+		"# HELP http_requests_total Total HTTP requests served.\n",
+		"# TYPE http_requests_total counter\n",
 		"# TYPE http_request_duration_seconds histogram\n",
 		"http_request_duration_seconds_bucket{le=\"+Inf\"}",
 		"http_request_duration_seconds_sum ",
@@ -131,19 +128,32 @@ func TestEnvOrDefault(t *testing.T) {
 	}
 }
 
-func TestIncrRequests(t *testing.T) {
-	before := HttpRequestsTotal.Load()
+func TestInstrumentRequests(t *testing.T) {
+	var logOutput bytes.Buffer
+	previousLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logOutput, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() {
+		slog.SetDefault(previousLogger)
+	})
+
 	beforeDurationCount := requestDurationCount.Load()
 	beforeDurationSum := requestDurationSumNanos.Load()
+	labels := requestCounterLabels{
+		appName:     "test-app",
+		method:      http.MethodGet,
+		status:      http.StatusNoContent,
+		apiNickname: "healthz",
+	}
+	beforeLabeledCount := requestCounterValue(labels)
 	called := false
-	handler := IncrRequests(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	handler := InstrumentRequests("test-app")(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		called = true
 		time.Sleep(30 * time.Millisecond)
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	response := httptest.NewRecorder()
 
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 
 	if !called {
 		t.Fatal("wrapped handler was not called")
@@ -151,14 +161,31 @@ func TestIncrRequests(t *testing.T) {
 	if response.Code != http.StatusNoContent {
 		t.Errorf("status = %d, want %d", response.Code, http.StatusNoContent)
 	}
-	if got := HttpRequestsTotal.Load(); got != before+1 {
-		t.Errorf("request count = %d, want %d", got, before+1)
-	}
 	if got := requestDurationCount.Load(); got != beforeDurationCount+1 {
 		t.Errorf("duration observation count = %d, want %d", got, beforeDurationCount+1)
 	}
 	if got := requestDurationSumNanos.Load() - beforeDurationSum; got < uint64(20*time.Millisecond) {
 		t.Errorf("recorded duration = %s, want at least 20ms", time.Duration(got))
+	}
+	if got := requestCounterValue(labels); got != beforeLabeledCount+1 {
+		t.Errorf("labeled request count = %d, want %d", got, beforeLabeledCount+1)
+	}
+	metricsResponse := httptest.NewRecorder()
+	MetricsHandler().ServeHTTP(metricsResponse, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+	wantMetric := fmt.Sprintf(
+		`http_requests_total{app_name="test-app",method="GET",status="204",apiNickname="healthz"} %d`,
+		beforeLabeledCount+1,
+	)
+	if !strings.Contains(metricsResponse.Body.String(), wantMetric) {
+		t.Errorf("metrics do not contain %q: %s", wantMetric, metricsResponse.Body.String())
+	}
+	startLog := strings.Index(logOutput.String(), `msg="Request starts"`)
+	endLog := strings.Index(logOutput.String(), `msg="Request ends"`)
+	if startLog < 0 || endLog < startLog {
+		t.Errorf("request logs missing or out of order: %q", logOutput.String())
+	}
+	if !strings.Contains(logOutput.String(), "time_taken=") {
+		t.Errorf("end log lacks request duration: %q", logOutput.String())
 	}
 }
 
@@ -183,4 +210,29 @@ func TestRecordRequestDurationUpdatesCumulativeBuckets(t *testing.T) {
 			t.Errorf("bucket le=%s count = %d, want %d", bucket.label, got, want)
 		}
 	}
+}
+
+func TestAPINickname(t *testing.T) {
+	for _, test := range []struct {
+		path string
+		want string
+	}{
+		{path: "/version", want: "version"},
+		{path: "/config", want: "config"},
+		{path: "/healthz", want: "healthz"},
+		{path: "/metrics", want: "metrics"},
+		{path: "/not-found", want: "unknown"},
+	} {
+		t.Run(test.path, func(t *testing.T) {
+			if got := apiNickname(test.path); got != test.want {
+				t.Errorf("apiNickname(%q) = %q, want %q", test.path, got, test.want)
+			}
+		})
+	}
+}
+
+func requestCounterValue(labels requestCounterLabels) uint64 {
+	requestCounters.RLock()
+	defer requestCounters.RUnlock()
+	return requestCounters.counts[labels]
 }
