@@ -38,7 +38,8 @@ tidy:
 	go mod tidy
 
 test:
-	go test ./...
+	go test -race -coverpkg=./... -coverprofile=coverage.out ./...
+	go tool cover -func=coverage.out | tail -n 1
 
 # Display build configuration
 info:
